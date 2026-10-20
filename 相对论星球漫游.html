@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>相对论星球漫游</title>
+<style>
+:root{--bg:#01020a;--panel:rgba(7,11,22,.74);--line:#2b3b5e;--tx:#e6edfb;--dim:#8fa0c4;--ac:#7fd0ff;--hot:#ffb36b;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--tx);font:13px/1.55 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;overflow:hidden}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+#hud{position:fixed;left:12px;top:calc(12px + env(safe-area-inset-top,0px));width:264px;max-height:calc(100% - 24px);overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;backdrop-filter:blur(8px)}
+h1{font-size:15px;margin:0 0 8px;font-weight:650;letter-spacing:.02em}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px}
+button{background:#0f1a30;color:var(--tx);border:1px solid var(--line);border-radius:6px;padding:6px 4px;font:inherit;cursor:pointer}
+button.on{background:var(--ac);color:#04101c;border-color:var(--ac);font-weight:650}
+button:focus-visible,input:focus-visible{outline:2px solid var(--hot);outline-offset:2px}
+label{display:block;color:var(--dim);margin-top:6px}
+input[type=range]{width:100%;accent-color:var(--ac)}
+#info{margin-top:8px;padding-top:8px;border-top:1px solid var(--line);color:var(--dim);font-variant-numeric:tabular-nums}
+#info b{color:var(--tx);font-weight:600}
+#tip{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(10px + env(safe-area-inset-bottom,0px));color:var(--dim);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:5px 12px;font-size:12px;white-space:nowrap;max-width:94vw;overflow:hidden;text-overflow:ellipsis}
+#cross{position:fixed;left:50%;top:50%;width:6px;height:6px;margin:-3px;border:1px solid rgba(255,255,255,.55);border-radius:50%;pointer-events:none}
+@media(max-width:640px){#hud{width:210px;font-size:12px}#tip{display:none}}
+</style></head><body>
+<div id="hud">
+ <h1>相对论星球漫游</h1>
+ <div class="row" id="btns"></div>
+ <label>速度 <b id="bv"></b><input id="sl" type="range" min="0" max="0.99" step="0.005" value="0.5"></label>
+ <label>相对论增亮强度 <b id="kv"></b><input id="ks" type="range" min="0" max="1" step="0.05" value="0.5"></label>
+ <label>曝光 <b id="gv"></b><input id="gs" type="range" min="0.3" max="4" step="0.1" value="1.5"></label>
+ <div class="row" style="margin-top:8px"><button id="rel" class="on">相对论 开 (V)</button><button id="rst">回正视角 (R)</button></div>
+ <div id="info"></div>
+</div>
+<div id="cross"></div>
+<div id="tip">W/S 前进后退 · A/D 转身 · Q/E 侧移 · 鼠标(点击锁定/拖动)转头 · 1-4 切换速度</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const V=THREE.Vector3,R=40,EYE=1.7;
+const lin=h=>new THREE.Color(h).convertSRGBToLinear();
+let sd=20260;const rnd=()=>{sd=(sd*1664525+1013904223)>>>0;return sd/4294967296};
+const renderer=new THREE.WebGLRenderer({antialias:false});
+renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));renderer.setSize(innerWidth,innerHeight);
+renderer.shadowMap.enabled=true;renderer.shadowMap.autoUpdate=false;renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+document.body.prepend(renderer.domElement);
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x000207);
+const S=new V(.6,.5,.62).normalize();
+const sun=new THREE.DirectionalLight(0xfff0dc,2.5);sun.castShadow=true;sun.shadow.mapSize.set(2048,2048);
+Object.assign(sun.shadow.camera,{left:-42,right:42,top:42,bottom:-42,near:1,far:220});sun.shadow.bias=-.0004;sun.shadow.normalBias=.06;
+scene.add(sun,sun.target,new THREE.AmbientLight(0x6a78a8,.6));
+
+// 星空与太阳（同样经过光行差与多普勒处理）
+{const n=2500,p=new Float32Array(n*3),c=new Float32Array(n*3);
+ for(let i=0;i<n;i++){const z=rnd()*2-1,a=rnd()*6.283,r=Math.sqrt(1-z*z);p.set([r*Math.cos(a)*700,z*700,r*Math.sin(a)*700],i*3);const w=.4+rnd()*.9,t=rnd();c.set([w*(.8+t*.2),w*.9,w*(1.2-t*.3)],i*3)}
+ const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(p,3));g.setAttribute('color',new THREE.BufferAttribute(c,3));
+ scene.add(new THREE.Points(g,new THREE.PointsMaterial({size:2,sizeAttenuation:false,vertexColors:true})));
+ const sm=new THREE.MeshBasicMaterial();sm.color.setRGB(7,6,4.6);const s=new THREE.Mesh(new THREE.SphereGeometry(18,20,14),sm);s.position.copy(S).multiplyScalar(600);scene.add(s)}
+
+// 星球地表（草地纹理）
+const gc=document.createElement('canvas');gc.width=gc.height=256;{const x=gc.getContext('2d');x.fillStyle='#4f8a3a';x.fillRect(0,0,256,256);
+ for(let i=0;i<2600;i++){x.fillStyle=`hsl(${85+rnd()*35},${35+rnd()*25}%,${24+rnd()*18}%)`;x.fillRect(rnd()*256,rnd()*256,2+rnd()*3,2+rnd()*3)}}
+const gt=new THREE.CanvasTexture(gc);gt.wrapS=gt.wrapT=THREE.RepeatWrapping;gt.repeat.set(40,20);gt.encoding=THREE.sRGBEncoding;
+const planet=new THREE.Mesh(new THREE.SphereGeometry(R,160,110),new THREE.MeshLambertMaterial({map:gt}));planet.receiveShadow=true;scene.add(planet);
+
+// 道路：贴合球面的大圆带
+const roads=[new V(0,1,0),new V(0,0,1),new V(.5,.7,-.5).normalize()];
+const rq=roads.map(n=>new THREE.Quaternion().setFromUnitVectors(new V(0,0,1),n));
+function rpt(i,t,off){const f=off/R;return new V(Math.cos(f)*Math.cos(t),Math.cos(f)*Math.sin(t),Math.sin(f)).applyQuaternion(rq[i])}
+function ribbon(i,w,h,color){const N=500,P=[],Nm=[],ix=[];
+ for(let k=0;k<=N;k++){const t=k/N*6.2832;for(const s of[-1,1]){const u=rpt(i,t,s*w);P.push(...u.clone().multiplyScalar(R+h).toArray());Nm.push(...u.toArray())}if(k<N){const a=k*2;ix.push(a,a+1,a+2,a+1,a+3,a+2)}}
+ const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(P,3));g.setAttribute('normal',new THREE.Float32BufferAttribute(Nm,3));g.setIndex(ix);
+ const m=new THREE.Mesh(g,new THREE.MeshLambertMaterial({color:lin(color),side:THREE.DoubleSide}));m.receiveShadow=true;scene.add(m)}
+roads.forEach((_,i)=>{ribbon(i,2.4,.05,0x4a4e57);ribbon(i,.9*.25,.09,0xe3c764)});
+function nearRoad(u){let d=1e9,k=0;roads.forEach((n,i)=>{const e=Math.abs(Math.asin(Math.max(-1,Math.min(1,u.dot(n)))))*R;if(e<d){d=e;k=i}});return{d,n:roads[k]}}
+
+// 实例化工具
+function Mx(u,t,sx,sy,sz,off=0){const tt=t.clone().addScaledVector(u,-t.dot(u)).normalize(),z=new V().crossVectors(tt,u);
+ return new THREE.Matrix4().makeBasis(tt,u,z).setPosition(u.clone().multiplyScalar(R+off)).multiply(new THREE.Matrix4().makeScale(sx,sy,sz))}
+function inst(g,m,L,sh=true){const im=new THREE.InstancedMesh(g,m,L.length);L.forEach((o,i)=>{im.setMatrixAt(i,o.m);if(o.c)im.setColorAt(i,o.c)});
+ im.frustumCulled=false;im.castShadow=im.receiveShadow=sh;scene.add(im)}
+const bx=()=>new THREE.BoxGeometry(1,1,1).translate(0,.5,0),cy=()=>new THREE.CylinderGeometry(1,1,1,7).translate(0,.5,0),
+ sp=()=>new THREE.SphereGeometry(1,10,8),L3=c=>new THREE.MeshLambertMaterial({color:lin(c)}),
+ rv=()=>new V(rnd()-.5,rnd()-.5,rnd()-.5).normalize(),pick=a=>a[Math.floor(rnd()*a.length)];
+const start=new V(1,0,.2).normalize(),obs=[];
+function spot(dmin,dmax,gap,rad){for(let a=0;a<400;a++){const u=rv(),r=nearRoad(u);if(r.d<dmin||r.d>dmax||u.angleTo(start)*R<14)continue;
+ if(obs.some(o=>o.u.angleTo(u)*R<Math.max(gap,o.r+rad)))continue;obs.push({u,r:rad});return{u,t:new V().crossVectors(r.n,u)}}return null}
+
+// 独栋住宅
+const H=[],Rf=[];
+for(let i=0;i<46;i++){const p=spot(6.5,15,9,4);if(!p)continue;const w=4.5+rnd()*2.5,d=4+rnd()*2.5,h=2.8+rnd()*1.2,c=new THREE.Color(pick([0xe8d5b5,0xd9a28b,0xb8c7d9,0xe6e2cf,0xc9d6b0])).convertSRGBToLinear();
+ H.push({m:Mx(p.u,p.t,w,h,d,-.1),c});Rf.push({m:Mx(p.u,p.t,w*1.08,1.7,d*1.08,h-.1),c:lin(pick([0x8b3a2f,0x5c4a45,0x6d5b8a,0x3e5e6b]))})}
+inst(bx(),L3(0xffffff),H);inst(new THREE.ConeGeometry(.7071,1,4).rotateY(Math.PI/4).translate(0,.5,0),L3(0xffffff),Rf);
+
+// 公寓楼（亮灯窗户）
+const wc=document.createElement('canvas');wc.width=64;wc.height=128;const em=document.createElement('canvas');em.width=64;em.height=128;
+{const a=wc.getContext('2d'),b=em.getContext('2d');a.fillStyle='#b9bcc4';a.fillRect(0,0,64,128);b.fillStyle='#000';b.fillRect(0,0,64,128);
+ for(let y=0;y<10;y++)for(let x=0;x<4;x++){const lit=rnd()<.45;a.fillStyle=lit?'#ffe3a0':'#3b5068';a.fillRect(5+x*15,6+y*12.4,9,7);if(lit){b.fillStyle='#ffd37a';b.fillRect(5+x*15,6+y*12.4,9,7)}}}
+const wt=new THREE.CanvasTexture(wc),et=new THREE.CanvasTexture(em);wt.encoding=et.encoding=THREE.sRGBEncoding;
+const A=[];for(let i=0;i<14;i++){const p=spot(8,18,14,6);if(!p)continue;A.push({m:Mx(p.u,p.t,7,14+rnd()*12,7,-.1),c:lin(pick([0xffffff,0xe6d8c8,0xcdd8e6]))})}
+inst(bx(),new THREE.MeshLambertMaterial({map:wt,emissiveMap:et,emissive:0xffffff}),A);
+
+// 路灯 / 信号塔 / 长椅
+const P=[],B=[],K=[],bulbs=[[4,3.3,1.9],[4,3.3,1.9],[4,3.3,1.9],[4.2,.35,.25],[2,3,5],[.5,4,.9],[4,2,.3]];
+function bulb(u,t,h,s,c){const m=Mx(u,t,s,s,s,h),o=new THREE.Color();o.setRGB(...c);B.push({m,c:o})}
+let n=0;for(let i=0;i<3;i++)for(let k=0;k<20;k++)for(const s of[-1,1]){const t=(k+(s>0?.5:0))/20*6.2832,u=rpt(i,t,s*3.4),tg=new V(-Math.sin(t),Math.cos(t),0).applyQuaternion(rq[i]);
+ P.push({m:Mx(u,tg,.09,4.6,.09)});bulb(u,tg,4.7,.3,bulbs[n++%bulbs.length]);
+ if(k%3==1&&s>0)K.push({m:Mx(rpt(i,t,4.3),tg,.5,.5,1.7,0),c:lin(0x6b4a2e)})}
+for(let i=0;i<7;i++){const p=spot(10,30,16,2);if(!p)continue;P.push({m:Mx(p.u,p.t,.45,13,.45)});bulb(p.u,p.t,13.3,.8,[4.5,.3,.2])}
+inst(cy(),L3(0x30343a),P);inst(sp(),new THREE.MeshBasicMaterial(),B,false);inst(bx(),L3(0xffffff),K);
+
+// 树木
+const T=[],Cr=[];
+for(let i=0;i<460;i++){const p=spot(4.5,60,3.2,1.6);if(!p)continue;const s=.8+rnd()*.9,t=rv();
+ T.push({m:Mx(p.u,t,.17*s,1.8*s,.17*s)});Cr.push({m:Mx(p.u,t,1.3*s,1.1*s,1.3*s,1.9*s),c:new THREE.Color().setHSL(.22+rnd()*.12,.5,.2+rnd()*.12).convertSRGBToLinear()})}
+inst(cy(),L3(0x5a3d26),T);inst(new THREE.IcosahedronGeometry(1,1).translate(0,.8,0),L3(0xffffff),Cr);
+
+// 玩家状态
+const st={u:start.clone(),h:new V(0,0,-1),hy:0,hp:0,va:0,beta:.5,rel:true,k:.5,g:1.5};
+const keys=new Set();
+const rt=new THREE.WebGLCubeRenderTarget(1024,{type:THREE.HalfFloatType,generateMipmaps:false,minFilter:THREE.LinearFilter,magFilter:THREE.LinearFilter});
+const cc=new THREE.CubeCamera(.1,1500,rt);scene.add(cc);
+
+// 相对论成像着色器：光行差 + 多普勒频移（光谱重采样）+ 相对论增亮
+const mat=new THREE.ShaderMaterial({uniforms:{tCube:{value:rt.texture},camRot:{value:new THREE.Matrix3()},vd:{value:new V(0,0,-1)},beta:{value:0},gam:{value:1},tanH:{value:1},asp:{value:1},q:{value:2.5},gain:{value:1.5}},
+vertexShader:'varying vec2 vUv;void main(){vUv=position.xy;gl_Position=vec4(position.xy,0.,1.);}',
+fragmentShader:`uniform samplerCube tCube;uniform mat3 camRot;uniform vec3 vd;uniform float beta,gam,tanH,asp,q,gain;varying vec2 vUv;
+float G(float l,float m,float s){float x=(l-m)/s;return exp(-.5*x*x);}
+vec3 spec(vec3 c,float D){vec3 o=vec3(0.);float L=dot(c,vec3(.3,.59,.11));
+ for(int i=0;i<18;i++){float lp=380.+float(i)*21.5;float l=lp*D;
+  float S=c.r*G(l,610.,50.)+c.g*G(l,545.,45.)+c.b*G(l,455.,35.)+.35*L*smoothstep(150.,380.,l)*pow(550./max(l,380.),2.5);
+  o+=S*vec3(G(lp,600.,52.),G(lp,545.,45.),G(lp,450.,32.));}
+ return o;}
+void main(){
+ vec3 dp=normalize(camRot*normalize(vec3(vUv.x*tanH*asp,vUv.y*tanH,-1.)));
+ vec3 res;
+ if(beta<1e-4){res=textureCube(tCube,dp).rgb*gain;}
+ else{
+  float cp=dot(dp,vd);                       // 观察者系中光线来向与运动方向夹角余弦
+  float c=(cp-beta)/(1.-beta*cp);            // 反向光行差：求静止系中的来向
+  vec3 pr=dp-cp*vd;float sp=length(pr);
+  vec3 d=c*vd+sqrt(max(0.,1.-c*c))*(sp>1e-5?pr/sp:vec3(0.));
+  float D=1./(gam*(1.-beta*cp));             // 多普勒因子 ν'/ν
+  vec3 col=textureCube(tCube,d).rgb;
+  vec3 W=spec(vec3(1.),1.),o=spec(col,D)/W,o1=spec(col,1.)/W;
+  vec3 ratio=clamp((col+.02)/(o1+.02),0.,6.);
+  res=o*ratio*pow(D,q)*gain;}
+ vec3 x=1.-exp(-res*1.1);
+ gl_FragColor=vec4(pow(x,vec3(1./2.2)),1.);}`,depthTest:false,depthWrite:false});
+const quad=new THREE.Mesh(new THREE.PlaneGeometry(2,2),mat);quad.frustumCulled=false;
+const qs=new THREE.Scene();qs.add(quad);const qc=new THREE.Camera();
+
+// 输入
+addEventListener('keydown',e=>{const k=e.key.toLowerCase();keys.add(k);if(k>='1'&&k<='4')setB([.25,.5,.75,.99][k-1]);if(k==='v')togRel();if(k==='r'){st.hy=st.hp=0}});
+addEventListener('keyup',e=>keys.delete(e.key.toLowerCase()));
+const cv=renderer.domElement;cv.addEventListener('click',()=>cv.requestPointerLock&&cv.requestPointerLock());
+addEventListener('mousemove',e=>{if(document.pointerLockElement===cv||e.buttons&1){st.hy-=e.movementX*.003;st.hp=Math.max(-1.5,Math.min(1.5,st.hp-e.movementY*.003))}});
+addEventListener('resize',()=>renderer.setSize(innerWidth,innerHeight));
+
+// HUD
+const btns=document.getElementById('btns'),sl=sl_=document.getElementById('sl'),bv=document.getElementById('bv'),info=document.getElementById('info');
+[.25,.5,.75,.99].forEach(b=>{const e=document.createElement('button');e.textContent=b.toFixed(2)+' c';e.onclick=()=>setB(b);e.dataset.b=b;btns.appendChild(e)});
+function setB(b){st.beta=b;sl.value=b;ui()}
+function ui(){bv.textContent=st.beta.toFixed(3)+' c';[...btns.children].forEach(e=>e.classList.toggle('on',Math.abs(+e.dataset.b-st.beta)<.003));
+ kv.textContent=st.k.toFixed(2);gv.textContent=st.g.toFixed(1)}
+const kv=document.getElementById('kv'),gv=document.getElementById('gv'),rb=document.getElementById('rel');
+sl.oninput=()=>setB(+sl.value);document.getElementById('ks').oninput=e=>{st.k=+e.target.value;ui()};document.getElementById('gs').oninput=e=>{st.g=+e.target.value;ui()};
+function togRel(){st.rel=!st.rel;rb.classList.toggle('on',st.rel);rb.textContent='相对论 '+(st.rel?'开':'关')+' (V)'}
+rb.onclick=togRel;document.getElementById('rst').onclick=()=>{st.hy=st.hp=0};ui();
+
+// 主循环
+let last=performance.now();const Mx4=new THREE.Matrix4();
+function frame(now){requestAnimationFrame(frame);const dt=Math.min(.05,(now-last)/1e3);last=now;
+ const u=st.u,h=st.h;
+ const turn=(keys.has('a')||keys.has('arrowleft')?1:0)-(keys.has('d')||keys.has('arrowright')?1:0);if(turn)h.applyAxisAngle(u,turn*1.5*dt);
+ const fw=(keys.has('w')||keys.has('arrowup')?1:0)-(keys.has('s')||keys.has('arrowdown')?1:0),sd_=(keys.has('e')?1:0)-(keys.has('q')?1:0);
+ const Rt=new V().crossVectors(h,u).normalize();
+ if(fw||sd_)st.va=Math.atan2(sd_,fw);
+ const vdir=h.clone().multiplyScalar(Math.cos(st.va)).addScaledVector(Rt,Math.sin(st.va)).normalize();
+ if(fw||sd_){const ax=new V().crossVectors(u,vdir).normalize(),w=12/R*dt;u.applyAxisAngle(ax,w);h.applyAxisAngle(ax,w)}
+ u.normalize();h.addScaledVector(u,-h.dot(u)).normalize();
+ // 摄像机基向量
+ const F=h,Rt2=new V().crossVectors(h,u).normalize();
+ const fh=F.clone().multiplyScalar(Math.cos(st.hy)).addScaledVector(Rt2,-Math.sin(st.hy));
+ const f=fh.clone().multiplyScalar(Math.cos(st.hp)).addScaledVector(u,Math.sin(st.hp));
+ const r=new V().crossVectors(fh,u).normalize(),cu=new V().crossVectors(r,f);
+ Mx4.makeBasis(r,cu,f.clone().negate());mat.uniforms.camRot.value.setFromMatrix4(Mx4);
+ // 以当前眼位渲染静止系立方体贴图
+ const eye=u.clone().multiplyScalar(R+EYE);cc.position.copy(eye);
+ sun.target.position.copy(eye);sun.position.copy(eye).addScaledVector(S,100);renderer.shadowMap.needsUpdate=true;
+ cc.update(renderer,scene);
+ const b=st.rel?st.beta:0,U=mat.uniforms;
+ U.vd.value.copy(vdir);U.beta.value=b;U.gam.value=1/Math.sqrt(1-b*b);U.q.value=5*st.k;U.gain.value=st.g;
+ U.tanH.value=Math.tan(42.5*Math.PI/180);U.asp.value=innerWidth/innerHeight;
+ renderer.render(qs,qc);
+ const g=1/Math.sqrt(1-b*b),Df=Math.sqrt((1+b)/(1-b)),ang=Math.acos(b)*180/Math.PI;
+ info.innerHTML=`洛伦兹因子 γ <b>${g.toFixed(2)}</b><br>前方多普勒因子 <b>${Df.toFixed(2)}</b>（后方 <b>${(1/Df).toFixed(2)}</b>）<br>正侧方物体表观方位：偏离正前 <b>${ang.toFixed(1)}°</b><br>静止系前半球全部压入前方 <b>${ang.toFixed(1)}°</b> 半角锥内<br>前方光子能量 ×${Df.toFixed(2)}，亮度 ∝ D<sup>${(5*st.k).toFixed(1)}</sup><br><span style="font-size:11px">运动方向：${fw<0?'后退':sd_?'侧向':'前进'}${st.va?'（可用 W/S 重置）':''}</span>`;}
+requestAnimationFrame(frame);
+</script></body></html>
